@@ -4072,55 +4072,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/client-reports", authenticateToken, async (req, res) => {
     try {
       const userId = (req as AuthRequest).user!.id;
-      const reports = await storage.getClientReports(userId);
+      const reports = await storage.getClientReports(userId);  
 
-      // Collect all unique IDs for batch fetching
-      const clientIds = new Set<number>();
-      const websiteIds = new Set<number>();
+      // 🚀 Fetch all clients and websites in one go
+      const clients = await storage.getClients(userId);
+      const websites = await storage.getWebsites(userId);  
 
-      reports.forEach(report => {
-        if (report.clientId) clientIds.add(report.clientId);
-        if (report.websiteIds && Array.isArray(report.websiteIds)) {
-          report.websiteIds.forEach(id => websiteIds.add(id));
-        }
-      });
+      // Build fast lookup maps
+      const clientMap = new Map(clients.map(c => [c.id, c.name || "Valued Client"]));
+      const websiteMap = new Map(websites.map(w => [w.id, w.name || "Website"]));  
 
-      // Batch fetch all clients and websites in just 2 queries
-      const [allClients, allWebsites] = await Promise.all([
-        clientIds.size > 0 ? storage.getClientsByIds(Array.from(clientIds), userId) : Promise.resolve([]),
-        websiteIds.size > 0 ? storage.getWebsitesByIds(Array.from(websiteIds), userId) : Promise.resolve([])
-      ]);
-
-      // Create lookup maps for fast access
-      const clientMap = new Map(allClients.map(client => [client.id, client]));
-      const websiteMap = new Map(allWebsites.map(website => [website.id, website]));
-
-      // Enrich reports using the lookup maps (no database calls here!)
+      // Enrich reports without extra DB queries
       const enrichedReports = reports.map(report => {
-        let clientName = 'N/A';
-        let websiteName = 'N/A';
-
-        // Get client name from map (O(1) lookup)
-        if (report.clientId && clientMap.has(report.clientId)) {
-          clientName = clientMap.get(report.clientId)!.name || 'Valued Client';
-        }
-
-        // Get website name from map (use first website if multiple)
+        const clientName = report.clientId ? (clientMap.get(report.clientId) || "N/A") : "N/A";
         const websiteIds = Array.isArray(report.websiteIds) ? report.websiteIds : [];
-        if (websiteIds.length > 0 && websiteMap.has(websiteIds[0])) {
-          websiteName = websiteMap.get(websiteIds[0])!.name || 'Website';
-        }
-        
+        const websiteName = websiteIds.length > 0 ? (websiteMap.get(websiteIds[0]) || "N/A") : "N/A";  
+
         return {
           ...report,
           clientName,
           websiteName
         };
-      });
+      });  
+
       res.json(enrichedReports);
     } catch (error) {
       console.error("Error fetching client reports:", error);
-      res.status(500).json({ 
+      res.status(500).json({
         message: "Failed to fetch client reports",
         error: error instanceof Error ? error.message : "Unknown error"
       });
