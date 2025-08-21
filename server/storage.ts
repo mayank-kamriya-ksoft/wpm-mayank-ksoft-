@@ -361,6 +361,41 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(clients.createdAt));
   }
 
+
+  // Add these methods to your storage class
+
+async getClientsByIds(clientIds: number[], userId: number): Promise<Client[]> {
+  if (clientIds.length === 0) return [];
+  
+  console.log('[storage] getClientsByIds called with clientIds:', clientIds, 'userId:', userId);
+  
+  return await db
+    .select()
+    .from(clients)
+    .where(and(
+      inArray(clients.id, clientIds),
+      eq(clients.userId, userId)
+    ));
+}
+
+async getWebsitesByIds(websiteIds: number[], userId: number): Promise<Website[]> {
+  if (websiteIds.length === 0) return [];
+  
+  console.log('[storage] getWebsitesByIds called with websiteIds:', websiteIds, 'userId:', userId);
+  
+  const result = await db
+    .select()
+    .from(websites)
+    .innerJoin(clients, eq(websites.clientId, clients.id))
+    .where(and(
+      inArray(websites.id, websiteIds),
+      eq(clients.userId, userId)
+    ))
+    .then(rows => rows.map(row => row.websites));
+  
+  return result;
+}
+
   async getClient(id: number, userId: number): Promise<Client | undefined> {
     const [client] = await db
       .select()
