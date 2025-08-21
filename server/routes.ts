@@ -4073,31 +4073,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = (req as AuthRequest).user!.id;
       const reports = await storage.getClientReports(userId);
-      
-      // Enrich each report with client and website information
-      const enrichedReports = await Promise.all(reports.map(async (report) => {
+
+      // Collect all unique IDs for batch fetching
+      const clientIds = new Set<number>();
+      const websiteIds = new Set<number>();
+
+      reports.forEach(report => {
+        if (report.clientId) clientIds.add(report.clientId);
+        if (report.websiteIds && Array.isArray(report.websiteIds)) {
+          report.websiteIds.forEach(id => websiteIds.add(id));
+        }
+      });
+
+      // Batch fetch all clients and websites in just 2 queries
+      const [allClients, allWebsites] = await Promise.all([
+        clientIds.size > 0 ? storage.getClientsByIds(Array.from(clientIds), userId) : Promise.resolve([]),
+        websiteIds.size > 0 ? storage.getWebsitesByIds(Array.from(websiteIds), userId) : Promise.resolve([])
+      ]);
+
+      // Create lookup maps for fast access
+      const clientMap = new Map(allClients.map(client => [client.id, client]));
+      const websiteMap = new Map(allWebsites.map(website => [website.id, website]));
+
+      // Enrich reports using the lookup maps (no database calls here!)
+      const enrichedReports = reports.map(report => {
         let clientName = 'N/A';
         let websiteName = 'N/A';
-        
-        try {
-          // Fetch client information if clientId exists
-          if (report.clientId) {
-            const client = await storage.getClient(report.clientId, userId);
-            if (client) {
-              clientName = client.name || 'Valued Client';
-            }
-          }
-          
-          // Fetch website information if websiteIds exist
-          const websiteIds = Array.isArray(report.websiteIds) ? report.websiteIds : [];
-          if (websiteIds.length > 0) {
-            const website = await storage.getWebsite(websiteIds[0], userId);
-            if (website) {
-              websiteName = website.name || 'Website';
-            }
-          }
-        } catch (error) {
-          console.error(`Error fetching client/website data for report ${report.id}:`, error);
+
+        // Get client name from map (O(1) lookup)
+        if (report.clientId && clientMap.has(report.clientId)) {
+          clientName = clientMap.get(report.clientId)!.name || 'Valued Client';
+        }
+
+        // Get website name from map (use first website if multiple)
+        const websiteIds = Array.isArray(report.websiteIds) ? report.websiteIds : [];
+        if (websiteIds.length > 0 && websiteMap.has(websiteIds[0])) {
+          websiteName = websiteMap.get(websiteIds[0])!.name || 'Website';
         }
         
         return {
@@ -4105,8 +4116,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           clientName,
           websiteName
         };
-      }));
-      
+      });
       res.json(enrichedReports);
     } catch (error) {
       console.error("Error fetching client reports:", error);
